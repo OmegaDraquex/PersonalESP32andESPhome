@@ -1,0 +1,57 @@
+esphome:
+  name: voc
+  friendly_name: voc
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: ""
+
+ota:
+  - platform: esphome
+    password: "526d719811eb4acd2319cd2d59c51934"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Voc Fallback Hotspot"
+    password: ""
+
+captive_portal:
+
+i2c:
+  sda: 8
+  scl: 9
+  scan: true
+  id: i2c_bus
+
+sensor:
+  - platform: aht10
+    variant: AHT20
+    temperature:
+      name: "Ambient Temperature"
+      id: aht_temp
+    humidity:
+      name: "Ambient Humidity"
+      id: aht_hum
+    update_interval: 60s
+
+  - platform: ens160_i2c
+    address: 0x53
+    eco2:
+      name: "eCO2"
+    tvoc:
+      name: "TVOC"
+    aqi:
+      name: "AQI"
+    compensation:
+      temperature: aht_temp
+      humidity: aht_hum
+    update_interval: 60s

@@ -1,0 +1,118 @@
+esphome:
+  name: esphome-web-e96ffc
+  friendly_name: "Tankless Water Heater"
+
+esp32:
+  board: esp32dev
+  variant: esp32
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+captive_portal:
+
+logger:
+  level: DEBUG
+  baud_rate: 0
+
+api:
+ota:
+  - platform: esphome
+
+uart:
+  # PZEM 1 - Using the pins you confirmed working
+  - id: uart_pzem_1
+    tx_pin: GPIO22
+    rx_pin: GPIO23
+    baud_rate: 9600
+    stop_bits: 1
+
+  # PZEM 2 - Hardware UART2 pins (Accidental D4 solder joint accounted for!)
+  - id: uart_pzem_2
+    tx_pin: GPIO17
+    rx_pin: GPIO4
+    baud_rate: 9600
+    stop_bits: 1
+
+  # PZEM 3 - Safe General Purpose pins
+  - id: uart_pzem_3
+    tx_pin: GPIO25
+    rx_pin: GPIO26
+    baud_rate: 9600
+    stop_bits: 1
+
+modbus:
+  - id: modbus_1
+    uart_id: uart_pzem_1
+  - id: modbus_2
+    uart_id: uart_pzem_2
+  - id: modbus_3
+    uart_id: uart_pzem_3
+
+sensor:
+  - platform: pzemac
+    modbus_id: modbus_1
+    voltage:
+      name: "Heater 1 Voltage"
+    power:
+      id: p1
+      name: "Heater 1 Power"
+      filters:
+        - multiply: 2.0
+    energy:
+      id: e1
+      name: "Heater 1 Energy"
+      filters:
+        - multiply: 2.0
+
+  - platform: pzemac
+    modbus_id: modbus_2
+    voltage:
+      name: "Heater 2 Voltage"
+    power:
+      id: p2
+      name: "Heater 2 Power"
+      filters:
+        - multiply: 2.0
+    energy:
+      id: e2
+      name: "Heater 2 Energy"
+      filters:
+        - multiply: 2.0
+
+  - platform: pzemac
+    modbus_id: modbus_3
+    voltage:
+      name: "Heater 3 Voltage"
+    power:
+      id: p3
+      name: "Heater 3 Power"
+      filters:
+        - multiply: 2.0
+    energy:
+      id: e3
+      name: "Heater 3 Energy"
+      filters:
+        - multiply: 2.0
+
+  # Combined Aggregates
+  - platform: template
+    name: "Total Heater Power"
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    lambda: |-
+      return (id(p1).state + id(p2).state + id(p3).state);
+    update_interval: 10s
+
+  - platform: template
+    name: "Total Heater Energy NEW"
+    unit_of_measurement: "Wh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    lambda: |-
+      return (id(e1).state + id(e2).state + id(e3).state);
+    update_interval: 1min

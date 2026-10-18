@@ -1,0 +1,125 @@
+esphome:
+  name: trashcan
+  friendly_name: Trashcan
+
+esp32:
+  board: esp32dev
+
+logger:
+
+api:
+  encryption:
+    key: ""
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: Trashcan Fallback Hotspot
+    password: ""
+
+captive_portal:
+
+# 1. State Tracker (Prevents the motor from grinding if you leave your hand there)
+globals:
+  - id: lid_is_open
+    type: bool
+    initial_value: 'false'
+
+# 2. I2C Bus Configuration for the VL53L0X
+i2c:
+  sda: 21
+  scl: 22
+  scan: true
+  frequency: 50kHz
+
+# 4. Motor Output Pins
+switch:
+  - platform: gpio
+    pin: 18
+    id: motor_ain1
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    pin: 19
+    id: motor_ain2
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+# 3. Time-of-Flight Sensor
+sensor:
+  - platform: vl53l0x
+    name: "Trash Can Distance"
+    address: 0x29
+    update_interval: 200ms
+    filters:
+      - median:
+          window_size: 3
+          send_every: 1
+          send_first_at: 1
+    on_value:
+      then:
+        - if:
+            # Trigger distance adjusted to 0.15 meters (~6 inches).
+            # Change 0.15 to 0.10 or 0.13 if it triggers too easily.
+            condition:
+              lambda: 'return x > 0.02 && x < 0.15;'
+            then:
+              - script.execute: auto_lid_timer
+
+# 5. The Smart Trash Can Logic (Separated for Safety)
+script:
+  # The Timer - This is the ONLY script that restarts
+  - id: auto_lid_timer
+    mode: restart
+    then:
+      - script.execute: open_lid_action
+      # Hold open for 30 seconds
+      - delay: 30s
+      - script.execute: close_lid_action
+
+  # The Open Action - mode: single means it cannot be interrupted once started
+  - id: open_lid_action
+    mode: single
+    then:
+      - if:
+          condition:
+            - lambda: 'return !id(lid_is_open);'
+          then:
+            # 500ms delay added before opening so it doesn't startle you
+            - delay: 500ms
+            - switch.turn_off: motor_ain1
+            - switch.turn_on: motor_ain2
+            - delay: 200ms
+            - switch.turn_off: motor_ain2
+            - lambda: 'id(lid_is_open) = true;'
+
+  # The Close Action - mode: single means it cannot be interrupted once started
+  - id: close_lid_action
+    mode: single
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(lid_is_open);'
+          then:
+            - switch.turn_off: motor_ain2
+            - switch.turn_on: motor_ain1
+            - delay: 280ms
+            - switch.turn_off: motor_ain1
+            - lambda: 'id(lid_is_open) = false;'
+
+# 6. Manual Overrides
+button:
+  - platform: template
+    name: "Emergency Stop"
+    icon: "mdi:stop-circle-outline"
+    on_press:
+      - then:
+          - switch.turn_off: motor_ain1
+          - switch.turn_off: motor_ain2
+          - lambda: 'id(lid_is_open) = false;'
+          - script.stop: auto_lid_timer

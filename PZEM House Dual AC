@@ -1,0 +1,144 @@
+esphome:
+
+  name: esphome-web-25dedc
+
+  friendly_name: CircuitBox
+
+
+esp32:
+
+  variant: esp32
+
+  framework:
+
+    type: esp-idf
+
+
+logger:
+
+  level: DEBUG
+
+
+api:
+
+ota:
+
+  - platform: esphome
+
+
+wifi:
+
+  ssid: !secret wifi_ssid
+
+  password: !secret wifi_password
+
+
+# Bus 1 (Circuit 1)
+
+uart:
+
+  - id: pzem_uart_1
+
+    tx_pin: GPIO17
+
+    rx_pin: GPIO16
+
+    baud_rate: 9600
+
+    stop_bits: 1
+
+
+# Bus 2 (Circuit 2)
+
+  - id: pzem_uart_2
+
+    tx_pin: GPIO22
+
+    rx_pin: GPIO23
+
+    baud_rate: 9600
+
+    stop_bits: 1
+
+
+modbus:
+
+  - id: pzem_modbus_1
+
+    uart_id: pzem_uart_1
+
+  - id: pzem_modbus_2
+
+    uart_id: pzem_uart_2
+
+
+sensor:
+
+  # Circuit 1 polling Bus 1
+
+  - platform: pzemac
+
+    modbus_id: pzem_modbus_1
+
+    address: 1
+
+    update_interval: 10s
+
+    voltage:
+
+      name: "Circuit 1 Voltage"
+
+    current:
+
+      name: "Circuit 1 Current"
+
+    power:
+
+      name: "Circuit 1 Power"
+
+      filters:
+
+        - multiply: 2.0
+
+    energy:
+
+      name: "Circuit 1 Energy"
+
+      filters:
+
+        - multiply: 2.0
+
+
+  # Circuit 2 polling Bus 2
+
+  - platform: pzemac
+
+    modbus_id: pzem_modbus_2
+
+    address: 1
+
+    update_interval: 10s
+
+    voltage:
+
+      name: "Circuit 2 Voltage"
+
+    current:
+
+      name: "Circuit 2 Current"
+
+    power:
+
+      name: "Circuit 2 Power"
+
+      filters:
+
+        - multiply: 2.0
+
+    energy:
+
+      name: "Circuit 2 Energy"
+
+      filters:
+
+        - multiply: 2.0

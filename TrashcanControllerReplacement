@@ -174,13 +174,13 @@ script:
             - switch.turn_off: motor_ain2
             - switch.turn_on: motor_ain1
             - delay: !lambda |-
-                int remaining_ms = 280 - (id(ticks_down) * 35);
-                if (remaining_ms < 80) remaining_ms = 80;
+                int remaining_ms = 280 - (id(ticks_down) * 12);
+                if (remaining_ms < 100) remaining_ms = 100;
                 return remaining_ms;
             - switch.turn_off: motor_ain1
             - lambda: 'id(ticks_down) = 0;'
 
-  # Intermediate Micro-Step Down (35ms close only - NEVER drives into top stop!)
+  # Intermediate Micro-Step Down (12ms blip - gravity assists downward movement!)
   - id: micro_step_down_action
     mode: single
     then:
@@ -190,12 +190,12 @@ script:
           then:
             - switch.turn_off: motor_ain2
             - switch.turn_on: motor_ain1
-            - delay: 35ms
+            - delay: 12ms
             - switch.turn_off: motor_ain1
             - lambda: 'id(ticks_down) += 1;'
 
-  # Recover upward after downward ticks (1.4 : 1 ratio => 25ms open per 35ms close tick)
-  # Used both as the final upward "Confirmation Nod" at 3 ticks (75ms up)
+  # Recover upward after downward ticks (working against gravity => 18ms open per 12ms close tick)
+  # Used both as the final upward "Confirmation Nod" at 3 ticks (54ms up)
   # and if the user pulls their hand away mid-countdown.
   - id: recover_ticks_up_action
     mode: single
@@ -207,8 +207,8 @@ script:
             - switch.turn_off: motor_ain1
             - switch.turn_on: motor_ain2
             - delay: !lambda |-
-                int up_ms = id(ticks_down) * 25;
-                if (up_ms > 100) up_ms = 100;
+                int up_ms = id(ticks_down) * 18;
+                if (up_ms > 80) up_ms = 80;
                 return up_ms;
             - switch.turn_off: motor_ain2
             - lambda: 'id(ticks_down) = 0;'

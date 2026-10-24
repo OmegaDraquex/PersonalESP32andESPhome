@@ -34,6 +34,11 @@ globals:
   - id: gesture_armed
     type: bool
     initial_value: 'true'
+  # Tracks how many 35ms downward micro-steps have occurred during a hold gesture
+  # so we can recover back to top cleanly or finish closing without grinding stops.
+  - id: ticks_down
+    type: int
+    initial_value: '0'
 
 # 2. I2C Bus Configuration for the VL53L0X
 i2c:
@@ -100,13 +105,28 @@ binary_sensor:
     on_release:
       then:
         - script.stop: hold_gesture_sequence
-        - lambda: 'id(gesture_armed) = true;'
         - if:
             condition:
-              lambda: 'return !id(lid_hold_open) && id(lid_is_open);'
+              lambda: 'return id(gesture_armed);'
             then:
-              # Hand left; restart the 30s timer for a clean full duration
-              - script.execute: auto_lid_timer
+              # If the user aborted mid-countdown (after 1-3 downward ticks),
+              # pop the lid back to full open so it doesn't sag.
+              - if:
+                  condition:
+                    lambda: 'return id(lid_is_open) && id(ticks_down) > 0;'
+                  then:
+                    - script.execute: recover_ticks_up_action
+              # If in normal mode and lid is open, restart 30s timer from when hand leaves
+              - if:
+                  condition:
+                    lambda: 'return !id(lid_hold_open) && id(lid_is_open);'
+                  then:
+                    - script.execute: auto_lid_timer
+            else:
+              # Hand was just removed after completing a lock or close gesture;
+              # wait 800ms before re-arming so hand withdrawal never re-triggers.
+              - delay: 800ms
+              - lambda: 'id(gesture_armed) = true;'
 
 # 6. Motor Actions and State Automation Logic
 script:
@@ -137,9 +157,12 @@ script:
             - switch.turn_on: motor_ain2
             - delay: 200ms
             - switch.turn_off: motor_ain2
-            - lambda: 'id(lid_is_open) = true;'
+            - lambda: |-
+                id(lid_is_open) = true;
+                id(ticks_down) = 0;
 
   # The Close Action - mode: single
+  # Compensates for any downward ticks already taken so it never grinds the bottom stop
   - id: close_lid_action
     mode: single
     then:
@@ -147,14 +170,18 @@ script:
           condition:
             - lambda: 'return id(lid_is_open);'
           then:
+            - lambda: 'id(lid_is_open) = false;'
             - switch.turn_off: motor_ain2
             - switch.turn_on: motor_ain1
-            - delay: 280ms
+            - delay: !lambda |-
+                int remaining_ms = 280 - (id(ticks_down) * 35);
+                if (remaining_ms < 80) remaining_ms = 80;
+                return remaining_ms;
             - switch.turn_off: motor_ain1
-            - lambda: 'id(lid_is_open) = false;'
+            - lambda: 'id(ticks_down) = 0;'
 
-  # Intermediate Micro-Twitch Haptic Feedback (Ratio 1.4 : 1 => 35ms close / 25ms open)
-  - id: micro_twitch_action
+  # Intermediate Micro-Step Down (35ms close only - NEVER drives into top stop!)
+  - id: micro_step_down_action
     mode: single
     then:
       - if:
@@ -165,27 +192,26 @@ script:
             - switch.turn_on: motor_ain1
             - delay: 35ms
             - switch.turn_off: motor_ain1
-            - delay: 40ms
-            - switch.turn_on: motor_ain2
-            - delay: 25ms
-            - switch.turn_off: motor_ain2
+            - lambda: 'id(ticks_down) += 1;'
 
-  # Confirmation Nod Action (~2x micro-twitch => 70ms close / 50ms open)
-  - id: confirmation_nod_action
+  # Recover upward after downward ticks (1.4 : 1 ratio => 25ms open per 35ms close tick)
+  # Used both as the final upward "Confirmation Nod" at 3 ticks (75ms up)
+  # and if the user pulls their hand away mid-countdown.
+  - id: recover_ticks_up_action
     mode: single
     then:
       - if:
           condition:
-            lambda: 'return id(lid_is_open);'
+            lambda: 'return id(lid_is_open) && id(ticks_down) > 0;'
           then:
-            - switch.turn_off: motor_ain2
-            - switch.turn_on: motor_ain1
-            - delay: 70ms
             - switch.turn_off: motor_ain1
-            - delay: 60ms
             - switch.turn_on: motor_ain2
-            - delay: 50ms
+            - delay: !lambda |-
+                int up_ms = id(ticks_down) * 25;
+                if (up_ms > 100) up_ms = 100;
+                return up_ms;
             - switch.turn_off: motor_ain2
+            - lambda: 'id(ticks_down) = 0;'
 
   # Long Hold Countdown Sequence (Mode: restart, stopped on_release)
   - id: hold_gesture_sequence
@@ -195,36 +221,39 @@ script:
           condition:
             lambda: 'return !id(lid_hold_open);'
           then:
-            # Entering Hold Open Mode
-            # Delay to 2.0s mark (500ms wait + 200ms open + 1300ms stationary)
+            # --- ENTERING HOLD OPEN MODE ---
+            # 0.0s - 0.7s: Lid waits 500ms and opens for 200ms.
+            # Wait until 2.0s total (1.3s after lid reaches full open)
             - delay: 2000ms
-            - script.execute: micro_twitch_action
-            # 3.0s mark
+            # Tick 1 (2.0s): Step down 35ms
+            - script.execute: micro_step_down_action
+            # Tick 2 (3.0s): Step down 35ms
             - delay: 1000ms
-            - script.execute: micro_twitch_action
-            # 4.0s mark
+            - script.execute: micro_step_down_action
+            # Tick 3 (4.0s): Step down 35ms (lid is now dipped ~105ms / ~37% down)
             - delay: 1000ms
-            - script.execute: micro_twitch_action
-            # 5.0s mark: Confirmation Nod and Lock
+            - script.execute: micro_step_down_action
+            # Lock (5.0s): Pop back up to full open (75ms open) as Confirmation Nod!
             - delay: 1000ms
             - lambda: |-
                 id(lid_hold_open) = true;
                 id(gesture_armed) = false;
             - script.stop: auto_lid_timer
-            - script.execute: confirmation_nod_action
+            - script.execute: recover_ticks_up_action
           else:
-            # Exiting Hold Open Mode (Lid is already open)
-            # 2.0s mark
-            - delay: 2000ms
-            - script.execute: micro_twitch_action
-            # 3.0s mark
+            # --- EXITING HOLD OPEN MODE (HOLD TO CLOSE IMMEDIATELY) ---
+            # Lid is already open, so start feedback at 1.0s!
+            # Tick 1 (1.0s): Step down 35ms
             - delay: 1000ms
-            - script.execute: micro_twitch_action
-            # 4.0s mark
-            - delay: 1000ms
-            - script.execute: micro_twitch_action
-            # 5.0s mark: Exit Hold Open and Close
-            - delay: 1000ms
+            - script.execute: micro_step_down_action
+            # Tick 2 (1.8s): Step down 35ms
+            - delay: 800ms
+            - script.execute: micro_step_down_action
+            # Tick 3 (2.6s): Step down 35ms
+            - delay: 800ms
+            - script.execute: micro_step_down_action
+            # Close Immediately (3.4s): Skip 30s timer and drive remaining 175ms closed!
+            - delay: 800ms
             - lambda: |-
                 id(lid_hold_open) = false;
                 id(gesture_armed) = false;
@@ -244,5 +273,6 @@ button:
               id(lid_is_open) = false;
               id(lid_hold_open) = false;
               id(gesture_armed) = true;
+              id(ticks_down) = 0;
           - script.stop: auto_lid_timer
           - script.stop: hold_gesture_sequence

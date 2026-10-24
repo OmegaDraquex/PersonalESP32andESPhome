@@ -74,16 +74,15 @@ sensor:
           send_first_at: 1
     on_value:
       then:
-        - component.update: hand_detected
+        - binary_sensor.template.publish:
+            id: hand_detected
+            state: !lambda 'return (x > 0.02 && x < 0.15);'
 
 # 5. Hand Presence Binary Sensor with Debounce
 binary_sensor:
   - platform: template
     id: hand_detected
     name: "Hand Detected"
-    lambda: |-
-      if (isnan(id(trash_distance).state)) return false;
-      return (id(trash_distance).state > 0.02 && id(trash_distance).state < 0.15);
     filters:
       - delayed_off: 450ms
     on_press:

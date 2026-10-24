@@ -23,11 +23,17 @@ wifi:
 
 captive_portal:
 
-# 1. State Tracker (Prevents the motor from grinding if you leave your hand there)
+# 1. State Trackers
 globals:
   - id: lid_is_open
     type: bool
     initial_value: 'false'
+  - id: lid_hold_open
+    type: bool
+    initial_value: 'false'
+  - id: gesture_armed
+    type: bool
+    initial_value: 'true'
 
 # 2. I2C Bus Configuration for the VL53L0X
 i2c:
@@ -36,7 +42,11 @@ i2c:
   scan: true
   frequency: 50kHz
 
-# 4. Motor Output Pins
+# 3. Motor Output Pins
+# Hardware timing constraint:
+# Full open duration: 200ms (motor_ain2)
+# Full close duration: 280ms (motor_ain1)
+# Potential-energy ratio (Close : Open) = 1.4 : 1
 switch:
   - platform: gpio
     pin: 18
@@ -50,9 +60,10 @@ switch:
     internal: true
     restore_mode: ALWAYS_OFF
 
-# 3. Time-of-Flight Sensor
+# 4. Time-of-Flight Sensor
 sensor:
   - platform: vl53l0x
+    id: trash_distance
     name: "Trash Can Distance"
     address: 0x29
     update_interval: 200ms
@@ -63,26 +74,57 @@ sensor:
           send_first_at: 1
     on_value:
       then:
+        - component.update: hand_detected
+
+# 5. Hand Presence Binary Sensor with Debounce
+binary_sensor:
+  - platform: template
+    id: hand_detected
+    name: "Hand Detected"
+    lambda: |-
+      if (isnan(id(trash_distance).state)) return false;
+      return (id(trash_distance).state > 0.02 && id(trash_distance).state < 0.15);
+    filters:
+      - delayed_off: 450ms
+    on_press:
+      then:
         - if:
-            # Trigger distance adjusted to 0.15 meters (~6 inches).
-            # Change 0.15 to 0.10 or 0.13 if it triggers too easily.
             condition:
-              lambda: 'return x > 0.02 && x < 0.15;'
+              lambda: 'return id(gesture_armed);'
             then:
+              - if:
+                  condition:
+                    lambda: 'return !id(lid_hold_open);'
+                  then:
+                    - script.execute: auto_lid_timer
+              - script.execute: hold_gesture_sequence
+    on_release:
+      then:
+        - script.stop: hold_gesture_sequence
+        - lambda: 'id(gesture_armed) = true;'
+        - if:
+            condition:
+              lambda: 'return !id(lid_hold_open) && id(lid_is_open);'
+            then:
+              # Hand left; restart the 30s timer for a clean full duration
               - script.execute: auto_lid_timer
 
-# 5. The Smart Trash Can Logic (Separated for Safety)
+# 6. Motor Actions and State Automation Logic
 script:
-  # The Timer - This is the ONLY script that restarts
+  # The Timer - restarts when hand is present in normal mode
   - id: auto_lid_timer
     mode: restart
     then:
       - script.execute: open_lid_action
       # Hold open for 30 seconds
       - delay: 30s
-      - script.execute: close_lid_action
+      - if:
+          condition:
+            lambda: 'return !id(lid_hold_open);'
+          then:
+            - script.execute: close_lid_action
 
-  # The Open Action - mode: single means it cannot be interrupted once started
+  # The Open Action - mode: single
   - id: open_lid_action
     mode: single
     then:
@@ -98,7 +140,7 @@ script:
             - switch.turn_off: motor_ain2
             - lambda: 'id(lid_is_open) = true;'
 
-  # The Close Action - mode: single means it cannot be interrupted once started
+  # The Close Action - mode: single
   - id: close_lid_action
     mode: single
     then:
@@ -112,7 +154,85 @@ script:
             - switch.turn_off: motor_ain1
             - lambda: 'id(lid_is_open) = false;'
 
-# 6. Manual Overrides
+  # Intermediate Micro-Twitch Haptic Feedback (Ratio 1.4 : 1 => 35ms close / 25ms open)
+  - id: micro_twitch_action
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return id(lid_is_open);'
+          then:
+            - switch.turn_off: motor_ain2
+            - switch.turn_on: motor_ain1
+            - delay: 35ms
+            - switch.turn_off: motor_ain1
+            - delay: 40ms
+            - switch.turn_on: motor_ain2
+            - delay: 25ms
+            - switch.turn_off: motor_ain2
+
+  # Confirmation Nod Action (~2x micro-twitch => 70ms close / 50ms open)
+  - id: confirmation_nod_action
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return id(lid_is_open);'
+          then:
+            - switch.turn_off: motor_ain2
+            - switch.turn_on: motor_ain1
+            - delay: 70ms
+            - switch.turn_off: motor_ain1
+            - delay: 60ms
+            - switch.turn_on: motor_ain2
+            - delay: 50ms
+            - switch.turn_off: motor_ain2
+
+  # Long Hold Countdown Sequence (Mode: restart, stopped on_release)
+  - id: hold_gesture_sequence
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(lid_hold_open);'
+          then:
+            # Entering Hold Open Mode
+            # Delay to 2.0s mark (500ms wait + 200ms open + 1300ms stationary)
+            - delay: 2000ms
+            - script.execute: micro_twitch_action
+            # 3.0s mark
+            - delay: 1000ms
+            - script.execute: micro_twitch_action
+            # 4.0s mark
+            - delay: 1000ms
+            - script.execute: micro_twitch_action
+            # 5.0s mark: Confirmation Nod and Lock
+            - delay: 1000ms
+            - lambda: |-
+                id(lid_hold_open) = true;
+                id(gesture_armed) = false;
+            - script.stop: auto_lid_timer
+            - script.execute: confirmation_nod_action
+          else:
+            # Exiting Hold Open Mode (Lid is already open)
+            # 2.0s mark
+            - delay: 2000ms
+            - script.execute: micro_twitch_action
+            # 3.0s mark
+            - delay: 1000ms
+            - script.execute: micro_twitch_action
+            # 4.0s mark
+            - delay: 1000ms
+            - script.execute: micro_twitch_action
+            # 5.0s mark: Exit Hold Open and Close
+            - delay: 1000ms
+            - lambda: |-
+                id(lid_hold_open) = false;
+                id(gesture_armed) = false;
+            - script.stop: auto_lid_timer
+            - script.execute: close_lid_action
+
+# 7. Manual Overrides
 button:
   - platform: template
     name: "Emergency Stop"
@@ -121,5 +241,9 @@ button:
       - then:
           - switch.turn_off: motor_ain1
           - switch.turn_off: motor_ain2
-          - lambda: 'id(lid_is_open) = false;'
+          - lambda: |-
+              id(lid_is_open) = false;
+              id(lid_hold_open) = false;
+              id(gesture_armed) = true;
           - script.stop: auto_lid_timer
+          - script.stop: hold_gesture_sequence

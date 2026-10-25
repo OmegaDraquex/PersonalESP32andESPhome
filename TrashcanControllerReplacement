@@ -81,7 +81,8 @@ sensor:
       then:
         - binary_sensor.template.publish:
             id: hand_detected
-            state: !lambda 'return (x > 0.02 && x < 0.15);'
+            # Tightened trigger distance to 0.10m (~4 inches) to prevent false triggers
+            state: !lambda 'return (x > 0.02 && x < 0.10);'
 
 # 5. Hand Presence Binary Sensor with Debounce
 binary_sensor:
@@ -89,6 +90,7 @@ binary_sensor:
     id: hand_detected
     name: "Hand Detected"
     filters:
+      - delayed_on: 200ms
       - delayed_off: 450ms
     on_press:
       then:
@@ -151,8 +153,8 @@ script:
           condition:
             - lambda: 'return !id(lid_is_open);'
           then:
-            # 500ms delay added before opening so it doesn't startle you
-            - delay: 500ms
+            # 300ms delay (combined with 200ms delayed_on = 500ms total before opening)
+            - delay: 300ms
             - switch.turn_off: motor_ain1
             - switch.turn_on: motor_ain2
             - delay: 200ms
